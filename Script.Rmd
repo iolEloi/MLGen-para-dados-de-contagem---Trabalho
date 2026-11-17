@@ -1,0 +1,98 @@
+---
+title: "Trabalho - Modelos Lineares Generalizados"
+author: "Elói, Caio, Gabriel e Jonathan"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo = FALSE, warning = FALSE}
+library(car)
+```
+
+# 0. Data load
+
+```{r, echo = TRUE}
+# Substitua por seu local
+abalone = read.table(
+  file.choose(),
+  header = FALSE,
+  sep = ',')
+
+colnames(abalone) = c('Sexo','Comprimento', 'Diametro', 'Altura', 'Peso_completo',
+                      'Peso_descascado', 'Peso_visceras', 'Peso_concha', 
+                      'Aneis')
+
+abalone$Sexo = as.factor(abalone$Sexo)
+```
+
+# 1. Análise descritiva e exploratória
+
+```{r, echo = TRUE}
+head(abalone) # Visão inicial dos dados
+
+hist(abalone$Aneis) # Verificando a distribuição da resposta 
+
+summary(abalone) # Descritiva geral
+```
+
+A princípio, a única coisa que realmente chama atenção é esse máximo de 29 com terceiro quartil de 11 no número de anéis, que pode indicar outliers. Vou evitar fazer gráficos de dispersão pela grande quantidade de covariáveis a princípio, se
+
+```{r, echo = TRUE}
+plot(Aneis ~ Comprimento, data = abalone) # Gráfico inviável
+
+val_comp = seq(0, 0.8, 0.05)
+
+avg_aneis_comp = numeric(0)
+
+
+for(i in 1:length(val_comp)){
+  avg_aneis_comp[i] = mean(abalone$Aneis[abalone$Comprimento >= val_comp[i]-0.05 & 
+                                     abalone$Comprimento <= val_comp[i]])
+}
+
+
+plot(avg_aneis_comp ~ val_comp)
+```
+
+Se nos baseássemos só nessa, seria possível pensar que a identidade é a FL ideal.
+
+# 2. Ajuste do modelo
+
+Ajuste do modelo inicial utilizando distribuição Poisson para $y|X$ e função de ligação logarítimica.
+
+```{r, echo = TRUE}
+baseline_model = glm(Aneis ~ ., family = poisson(link = 'log'), data = abalone)
+
+summary(baseline_model)
+```
+
+```{r, echo = TRUE}
+mod_sqrt = glm(Aneis ~ ., family = poisson(link = 'sqrt'), data = abalone)
+
+# ini = coef(lm(Aneis ~ ., data = abalone))
+#mod_identity = glm(Aneis ~ ., family = poisson(link = 'identity'), data = abalone,
+#                   start = ini)
+
+# mod_identity = glm(Aneis ~ ., family = poisson(link = 'identity'),
+#                   data = abalone, mustart = abalone$Aneis)
+
+print(c(AIC(baseline_model), AIC(mod_sqrt)))
+```
+
+Foi feita a tentativa de ajustar três modelos com diferentes funções de ligação afim de comparar via AIC qual seria a melhor alternativa. A função de ligação identidade teve problemas relacionados ao domínio da resposta, portanto foram comparadas as duas restantes; logarítimica (canônica) e raiz quadrada.\
+AIC com FL raiz quadrada é menor que de FL logarítimica, mas será que a diferença é relevante ?
+
+# 3. Seleção de variáveis
+
+## Avaliando multicolinearidade
+
+```{r}
+vif(baseline_model)
+```
+
+Multicolinearidade alta, possível resolver usando feature engineering.
+
+# 4. Análise de diagnóstico
