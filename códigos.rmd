@@ -1,7 +1,6 @@
 ---
-title: "trab-mlg"
-author: "Elói"
-date: "2026-11-12"
+title: "Trabalho - Modelos Lineares Generalizados"
+author: "Elói, Caio, Gabriel e Jonathan"
 output: html_document
 ---
 
@@ -9,7 +8,15 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-##### Importação
+```{r, echo = FALSE, warning = FALSE}
+library(car)
+library(lmtest)
+library(gamlss)
+library(readxl)
+library(MASS)
+```
+
+# 0. Data load
 
 ```{r, echo = TRUE}
 #substitua por seu local
@@ -24,20 +31,20 @@ abalone$Sexo = as.factor(abalone$Sexo)
 
 head(abalone)
 ```
+# 1. Análise descritiva e exploratória
 
 ```{r, echo = TRUE}
-hist(abalone$Aneis)
+head(abalone) # Visão inicial dos dados
 
-summary(abalone)
+hist(abalone$Aneis) # Verificando a distribuição da resposta 
+
+summary(abalone) # Descritiva geral
 ```
 
-A princípio, a única coisa que realmente chama atenção é esse máximo de 29 com 
-terceiro quartil de 11 no número de anéis, que pode indicar outliers. Vou evitar
-fazer gráficos de dispersão pela grande quantidade de covariáveis a princípio,
-se
+A princípio, a única coisa que realmente chama atenção é esse máximo de 29 com terceiro quartil de 11 no número de anéis, que pode indicar outliers. Vou evitar fazer gráficos de dispersão pela grande quantidade de covariáveis a princípio, se
 
 ```{r, echo = TRUE}
-plot(Aneis ~ Comprimento, data = abalone) #nah
+plot(Aneis ~ Comprimento, data = abalone) # Gráfico inviável
 
 val_comp = seq(0, 0.8, 0.05)
 
@@ -53,19 +60,139 @@ for(i in 1:length(val_comp)){
 plot(avg_aneis_comp ~ val_comp)
 ```
 
-
 Se nos baseássemos só nessa, seria possível pensar que a identidade é a FL ideal.
+
+# 2. Ajuste do modelo
+
+Ajuste do modelo inicial utilizando distribuição Poisson para $y|X$ e função de ligação logarítimica.
+
+```{r, echo = TRUE}
+baseline_model = glm(Aneis ~ .**2, family = poisson(link = 'log'), data = abalone)
+
+summary(baseline_model)
+```
+
+```{r, echo = TRUE}
+mod_sqrt = glm(Aneis ~ ., family = poisson(link = 'sqrt'), data = abalone)
+
+#ini = coef(baseline_model)
+#mod_identity = glm(Aneis ~ ., family = poisson(link = 'identity'), data = abalone,
+#               start = ini, maxit = 150)
+
+# mod_identity = glm(Aneis ~ ., family = poisson(link = 'identity'),
+#                   data = abalone, mustart = abalone$Aneis)
+
+print(c(AIC(baseline_model), AIC(mod_sqrt)))
+```
+
+Foi feita a tentativa de ajustar três modelos com diferentes funções de ligação afim de comparar via AIC qual seria a melhor alternativa. A função de ligação identidade teve problemas relacionados ao domínio da resposta, portanto foram comparadas as duas restantes; logarítimica (canônica) e raiz quadrada.\
+AIC com FL raiz quadrada é menor que de FL logarítimica, mas será que a diferença é relevante ?
+
+Definitivamente. Lembre que a diferença dos AIC na comparação entre funções de ligação
+deve ser pensada de forma absoluta, ou seja, uma diferença de 40 é muita coisa, e seria
+"equivalente a ter 20 variáveis a mais no modelo", por exemplo (por causa da penalização
+ser 2k).
+
+# 3. Seleção de variáveis
+
+## A partir daqui, eu saí só testando um bando de coisas.
+
+## Avaliando multicolinearidade
+
+```{r}
+vif(baseline_model)
+
+### stepwise
+mod_nulo_log  = glm(Aneis ~ 1, family = poisson(link = 'log'), data = abalone)
+
+mod_step = step(mod_nulo_log, scope = list(lower = mod_nulo_log, upper = baseline_model),
+                direction = 'both', trace = FALSE)
+```
+
+Multicolinearidade alta; faremos seleção automática de covariáveis, se a situação
+permanecer, é possível resolver usando feature engineering.
+
+# 4. Análise de diagnóstico
+
+#Na verdade, eu decidi fazer uma penca de testes. 
+
+##### Envelope (só rode se tiver tempo a perder. Esse inicial não ficou especialmente bom)
+```{r, echo = TRUE}
+#fit.model = mod_step
+#source("/home/elio/Downloads/programas/envelopes/envelope_poisson.R")
+```
+
+
+##### Resíduos quantílicos aleatorizados (eu acabei foi fazendo um modelo duplo pra ver)
+```{r, echo = TRUE}
+mod_gam_pois = gamlss(formula(mod_step), sigma.formula = ~ ., family = DPO, data = abalone)
+
+plot(mod_gam_pois)
+```
+note a mudança de amplitude e o desvio da
+```{r, echo = TRUE}
+rqres.plot(mod_gam_pois, howmany=50, plot="all")
+```
+
+
+Padrão visível no gráfico de valores ajustados por resíduos quantílicos aleatorizados.
+
+
+Partindo para o modelo Binomial Negativa:
 
 
 ```{r, echo = TRUE}
-mod_pois_log = glm(Aneis ~ ., family = poisson(link = 'log'), data = abalone)
-
-summary(mod_pois_log)
+mod_gam_bn = gamlss(Aneis ~ ., family = NBI(mu.link = 'log'), data = abalone)
+plot(mod_gam_bn)
 ```
 
-```{r, echo=TRUE, fig.align='center', fig.height = 3.5, fig.width=5}
-set.seed(412)
 
-fit.model = mod_pois_log
-source("/home/elio/Downloads/programas/envelopes/envelope_poisson.R")
+```{r}
+mod_2 = glm(Aneis ~ Sexo + Comprimento + Diametro + Altura + Peso_descascado
+               + Peso_visceras + Peso_concha, family = poisson(link = 'log'), data = abalone)
+
+mod_nulo_log  = glm(Aneis ~ 1, family = poisson(link = 'log'), data = abalone)
+
+mod_step = step(mod_nulo_log, scope = list(lower = mod_nulo_log, upper = mod_2),
+                direction = 'both', trace = FALSE)
+
+mod_3 = glm(Aneis ~ (Peso_concha + Peso_descascado + Diametro + Sexo + Altura)**2, family = poisson(link = 'log'), data = abalone)
+
+mod_step_2 = step(mod_nulo_log, scope = list(lower = mod_nulo_log, upper = mod_3),
+                direction = 'both', trace = FALSE)
 ```
+
+```{r, echo = TRUE}
+#fit.model = mod_step_2
+#source("/home/elio/Downloads/programas/envelopes/envelope_poisson.R")
+```
+
+### Agora decidi pegar pesado.
+```{r, echo = TRUE}
+mod_duplo = gamlss(Aneis ~ (Comprimento + Diametro + Altura + Peso_descascado + Peso_visceras +
+                              Peso_concha)**2, sigma.formula = ~(Sexo + Comprimento + Diametro + 
+                                                                   Altura+ Peso_descascado +
+                                                                   Peso_visceras +
+                                                                   Peso_concha),
+                   family = DPO(mu.link = 'log'), data = abalone)
+
+plot(mod_duplo)
+
+rqres.plot(gam_2, howmany=100, plot="all")
+
+
+mod_duplo_nsig = gamlss(Aneis ~ Comprimento + Diametro + Altura + Peso_descascado + Peso_visceras +
+                              Peso_concha, sigma.formula = ~ 1, family = DPO(mu.link = 'log'),
+                        data = abalone)
+
+mod_duplo_step <- stepGAIC(mod_duplo_nsig, what = 'sigma',
+                      scope = list(lower = ~ 1,
+                                   upper = ~ Sexo + Comprimento + Diametro + Altura +
+                                            Peso_completo + Peso_descascado +
+                                            Peso_visceras + Peso_concha),
+                      direction = "both", k = 2, trace = FALSE)
+
+plot(mod_duplo_step)
+```
+
+
