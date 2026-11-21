@@ -1,0 +1,128 @@
+---
+title: "dor"
+author: "Elói"
+date: "2026-11-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Importação, organização, etc.
+```{r}
+#install.packages(c("AER", "wooldridge"))
+library(AER)
+library(gamlss)
+library(wooldridge)
+library(MASS)
+library(car)
+library(lmtest)
+
+data("DoctorVisits", package = "AER")
+
+docvis = DoctorVisits
+
+head(docvis)
+
+docvis$gender = as.factor(docvis$gender)
+docvis$private = as.factor(docvis$private)
+docvis$freepoor = as.factor(docvis$freepoor)
+docvis$freerepat = as.factor(docvis$freerepat)
+docvis$nchronic = as.factor(docvis$nchronic)
+docvis$lchronic = as.factor(docvis$lchronic)
+
+```
+
+### Primeiramente, só para identificar possível inflação de 0's e afins
+```{r, echo = TRUE}
+hist(docvis$visit)
+summary(docvis)
+```
+
+Dá para ver que tem uma GRANDE concentração nos 0's. O TERCEIRO QUARTIL é 0.
+
+Enfim, são 5190 observações, então dá para imaginar que o ajuste vai tender a ser
+um pouco complicado.
+
+
+### Testes de ajustes
+Alguns dos modelos que eu testei e que deram algum resultado (porque, por exemplo,
+os inflacionados de 0's, não convergiam ou não rodavam):
+```{r, echo = TRUE}
+
+## Lembrando que todos esses têm ligação log por padrão.
+
+# Horroroso
+mod_po = gamlss(visits ~.**2, family = PO, data = docvis) 
+
+# Meio ruim
+mod_nb1 = gamlss(visits ~.**2, family = NBI, data = docvis) 
+mod_nb2 = gamlss(visits ~.**2, family = NBII, data = docvis)
+mod_pig = gamlss(visits ~.**2, family = PIG, data = docvis)
+
+# Beira o aceitável, mas um pouco duvidoso
+mod_si = gamlss(visits ~.**2, family = SI, data = docvis, 
+                control = gamlss.control(n.cyc = 100))
+mod_sic = gamlss(visits ~.**2, family = SICHEL, data = docvis, 
+                control = gamlss.control(n.cyc = 100))
+
+# Bastante decente
+mod_bnb = gamlss(visits ~.**2, family = BNB, data = docvis)
+
+#daí eu tentei jogar ele num stepwise, mas ele não ajustava só com intercepto.
+#Sendo assim, fiz stepwise no PIG e usei os coeficientes dele no BNB. Ficou legal.
+mod0 = gamlss(visits ~ 1, family = PIG, data = docvis)
+mod_step = step(mod0, scope = list(lower = mod0, upper = mod_pig),
+                direction = 'both', trace = FALSE)
+
+
+mod_final = gamlss(formula(mod_step), family = BNB, data = docvis)
+
+#
+
+# Daí eu tentei um duplo, para ver se melhorava. Ele piorou um pouco (preste atenção
+#no range do eixo Y do gráfico de resíduos por valores ajustados, tem MUITOS discrepantes,
+#o que indica mau ajuste, em geral - discrepantes devem ser raros).
+
+duplomod <- stepGAIC(
+  mod_final,
+  what = "sigma",
+  scope = list(lower = ~ 1, upper = ~ gender + age + income + illness + reduced + health),
+  direction = "forward"
+)
+
+## OK, ele escolheu gênero, renda e "doenças". Vou reajustar para ter certeza, porque alguns
+#passos divergiram.
+
+duplomod = gamlss(formula(mod_step), sigma.formula = ~ illness + income + gender,
+                  family = BNB, data = docvis, control = gamlss.control(n.cyc = 100),
+                  start.from = mod_final)
+
+```
+
+Se você está se perguntando de onde eu tirei que algo está bom ou ruim, rode, 
+pra cada modelo:
+```{r, echo = TRUE}
+# coloca só aqui, deixei mais fácil
+fit = mod_sic
+
+
+
+plot(fit)
+
+rqres.plot(fit, howmany=50, plot="all")
+
+# A Sichel demora, pelo fato de ser lenta de ajuste, mesmo, e o modelo estar com
+#todas as covariáveis possíveis. Ela ficou pior que a BNB, de qualquer forma, 
+#porque tem heteroscedasticidade bem mais clara nos resíduos quantílicos aleatorizados.
+
+summary(fit)
+```
+
+
+Daí, o que eu acho é que, agora, devemos focar em melhorar esse *mod_final*, já que
+a distribuição dele se ajusta bem aos dados, então qualquer melhora é um ganho ao
+invés de um pedido de desculpas.
+
+Enfim, vejam o que acham.
