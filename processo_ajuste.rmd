@@ -12,12 +12,18 @@ knitr::opts_chunk$set(echo = TRUE)
 ### Importação, organização, etc.
 ```{r}
 #install.packages(c("AER", "wooldridge"))
+
+set.seed(412)
+
 library(AER)
 library(gamlss)
 library(wooldridge)
 library(MASS)
 library(car)
 library(lmtest)
+library(parallel)
+
+n_cores <- detectCores() - 1
 
 data("DoctorVisits", package = "AER")
 
@@ -61,6 +67,8 @@ mod_nb1 = gamlss(visits ~.**2, family = NBI, data = docvis)
 mod_nb2 = gamlss(visits ~.**2, family = NBII, data = docvis)
 mod_pig = gamlss(visits ~.**2, family = PIG, data = docvis)
 
+
+mod_nbf = gamlss(visits ~.**2, family = NBF, data = docvis)
 # Beira o aceitável, mas um pouco duvidoso
 mod_si = gamlss(visits ~.**2, family = SI, data = docvis, 
                 control = gamlss.control(n.cyc = 100))
@@ -95,8 +103,8 @@ duplomod <- stepGAIC(
 ## OK, ele escolheu gênero, renda e "doenças". Vou reajustar para ter certeza, porque alguns
 #passos divergiram.
 
-duplomod = gamlss(formula(mod_step), sigma.formula = ~ illness + income + gender,
-                  family = BNB, data = docvis, control = gamlss.control(n.cyc = 100),
+duplomod = gamlss(visits ~.**2, sigma.formula = ~ illness + income + gender,
+                  family = NBF, data = docvis, control = gamlss.control(n.cyc = 100),
                   start.from = mod_final)
 
 ```
@@ -105,7 +113,7 @@ Se você está se perguntando de onde eu tirei que algo está bom ou ruim, rode,
 pra cada modelo:
 ```{r, echo = TRUE}
 # coloca só aqui, deixei mais fácil
-fit = mod_sic
+fit = duplomod
 
 
 
@@ -121,8 +129,164 @@ summary(fit)
 ```
 
 
+```{r, echo=TRUE, fig.align='center', fig.height = 3.5, fig.width=5, fig.cap = 'Distância de Cook por valores ajustados'}
+X = model.matrix(fit)
+
+w = as.vector(fit$weights)
+W = diag(w)
+
+auxh <- solve(t(X)%*%W%*%X) 
+
+H <- sqrt(W)%*%X%*%auxh%*%t(X)%*%sqrt(W)
+h <- diag(H)
+
+phi = 1/fit$sigma
+
+pre_tsi = residuals(fit, what = 'mu', type = 'weighted')
+tsi = pre_tsi/sqrt(1-h) #aparentemente o GAMLSS ajusta com um phi para cada obs
+#e joga tudo no cálculo dos pesos, então o resíduo de Pearson sem studentização
+#dele, sendo calculado multiplicando pela raíz do peso, meio que já dá conta de
+#todos os termos faltando nessa fórmula.
+
+ldi <- h*(tsi^2)/(1 - h)
+plot(fitted(fit), tsi,xlab="Índice",ylab="Distância de Cook")
+```
+
+
 Daí, o que eu acho é que, agora, devemos focar em melhorar esse *mod_final*, já que
 a distribuição dele se ajusta bem aos dados, então qualquer melhora é um ganho ao
 invés de um pedido de desculpas.
 
 Enfim, vejam o que acham.
+
+
+
+# TENTATIVA DE CATEGORIZAÇÃO E REAGRUPAMENTO
+
+Olhem os padrões:
+
+```{r, echo = TRUE}
+aggregate(visits ~ reduced, data = docvis, FUN = mean)
+aggregate(visits ~ health, data = docvis, FUN = mean)
+aggregate(visits ~ age, data = docvis, FUN = mean)
+```
+
+A princípio, como comentado, a variável de maior influência é a reduced. Comecemos
+por ela.
+```{r, echo = TRUE}
+redtime = c(0)
+
+for(i in 1:nrow(docvis)){
+  if(docvis[i, ]$reduced == 0){redtime[i] = 'No'}
+  else if (docvis[i, ]$reduced %in% 1:7){redtime[i] = 'Less1week'}
+  else {redtime[i] = 'More1week'}
+}
+
+aggregate(visits ~ redtime, data = docvis, FUN = mean)
+
+
+docvis$reduced = redtime
+
+
+modtest = gamlss(visits ~ redtime, family = NBI, data = docvis) 
+
+plot(modtest)
+rqres.plot(modtest, howmany=50, plot="all")
+
+```
+
+Agora, para a variável que apareceu nos modelos para as duas subamostras, *health* 
+
+```{r, echo = TRUE}
+
+healthlvl = c(0)
+
+for(i in 1:nrow(docvis)){
+  if(docvis[i, ]$health %in% 0:3){healthlvl[i] = 'Low'}
+  else if (docvis[i, ]$health %in% 4:7){healthlvl[i] = 'Average'}
+  else {healthlvl[i] = 'High'}
+}
+
+
+table(healthlvl)
+
+aggregate(visits ~ healthlvl, data = docvis, FUN = mean)
+
+
+docvis$health = healthlvl
+
+
+modtest = gamlss(visits ~ redtime + health, family = NBI, data = docvis) 
+
+plot(modtest)
+rqres.plot(modtest, howmany=50, plot="all")
+
+```
+
+
+Dei uma olhada, e não parece haver um padrão de crescimento esquisito de acordo com
+a *illness*. Vejam:
+```{r, echo = TRUE}
+aggregate(visits ~ illness, data = docvis, FUN = mean)
+```
+
+Sendo assim, partamos para as faixas etárias
+```{r, echo = TRUE}
+agegroup = c(0)
+
+for(i in 1:nrow(docvis)){
+  if(docvis[i, ]$age %in% c(0.19, 0.22, 0.27)){agegroup[i] = 'Young_adult'}
+  else if (docvis[i, ]$age %in% c(0.32, 0.37, 0.42, 0.47)){agegroup[i] = 'Adult'}
+  else {agegroup[i] = 'Middle_aged'}
+}
+
+aggregate(visits ~ agegroup, data = docvis, FUN = mean)
+
+
+docvis$age = agegroup
+
+#eu fui tentando tirar um a um no teste.
+modtest = gamlss(visits ~., family = NBI, data = docvis)
+modtest2 = gamlss(visits ~ (age + health + gender + illness + reduced + freepoor +
+                    lchronic), family = NBI, data = docvis)
+
+lrtest(modtest, modtest2)
+```
+
+Desisti e fui pro stepwise. Depois disso, parti para testar outros modelos, fora a
+Binomial Negativa.
+
+```{r, echo = TRUE}
+modtest = gamlss(visits ~.**2, family = NBI, data = docvis)
+
+plot(modtest)
+
+rqres.plot(modtest, howmany=50, plot="all")
+
+## Fiz o stepwise, mas pouparei vocês da exigência computacional
+
+#mod_step = stepGAIC(modtest, scope = list(lower = ~1, upper = formula(modtest)),
+#                    what = 'mu', direction = 'both', trace = FALSE, k = qchisq(0.95, 1),
+#                    parallel = 'snow', ncpus = n_cores)
+
+#summary(mod_step)
+
+
+fmodstep = visits ~ gender + age + income + illness + reduced + health + 
+    private + freepoor + freerepat + nchronic + gender:illness + 
+    income:freepoor + illness:reduced + illness:health + reduced:private + 
+    reduced:freerepat + health:freerepat + freepoor:nchronic
+
+
+
+### Testando a PIG de novo
+modfinal = gamlss(fmodstep, family = PIG, data = docvis)
+
+
+plot(modfinal)
+
+rqres.plot(modfinal, howmany=50, plot="all")
+
+```
+
+
