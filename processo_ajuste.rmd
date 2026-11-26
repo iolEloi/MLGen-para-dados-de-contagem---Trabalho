@@ -1,6 +1,10 @@
 ---
-title: "dor"
-author: "Elói"
+title: "Trabalho Final de MLG"
+author:
+- 'Caio Vitor Mesquita Mendonça & RA: 813484'
+- 'Elói Beijamin da Silva & RA: 822336'
+- 'Gabriel & RA:'
+- 'Jonathan & RA: '
 date: "2026-11-21"
 output: html_document
 ---
@@ -10,7 +14,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ### Importação, organização, etc.
-```{r}
+
+```{r, include=FALSE}
+set.seed(412)
 #install.packages(c("AER", "wooldridge"))
 library(AER)
 library(gamlss)
@@ -18,6 +24,7 @@ library(wooldridge)
 library(MASS)
 library(car)
 library(lmtest)
+library(dplyr)
 
 data("DoctorVisits", package = "AER")
 
@@ -34,21 +41,89 @@ docvis$lchronic = as.factor(docvis$lchronic)
 
 ```
 
+
+### Teste de análise de modelo usando uma amostra extratificada
+
+
+```{r}
+H_1 <- n_distinct(docvis$lchronic)
+
+amostra_1 <- docvis %>%
+  group_by(lchronic) %>%
+  slice_sample(n = 200 / H_1) %>%
+  ungroup()
+
+H_2 <- n_distinct(docvis$freerepat)
+
+amostra_2 <- docvis %>%
+  group_by(freerepat) %>%
+  slice_sample(n = 200 / H_2) %>%
+  ungroup()
+```
+
+Realizamos duas amostras com 200 observações usando o método de amostragem extratificada para as variáveis `lchronic` e `freerepat` de forma separada. Agora iremos fazer os modelos Poisson, ZIP (Poisson inflacionada de zeros) e ZIPN (Binomial negativa inflacionada de zeros).
+
+
+```{r, warning=FALSE}
+
+mod1 <- gamlss(visits ~ 1, data = amostra_1, family = PO(mu.link = 'log'))
+mod1_pos <- gamlss(visits ~ .**2, data = amostra_1, family = PO(mu.link = 'log'))
+plot(mod1_pos)
+rqres.plot(mod1_pos, howmany=50, plot="all")
+
+
+mod2 <- gamlss(visits ~ 1, data = amostra_2, family = PO(mu.link = 'log'))
+mod2_pos <- gamlss(visits ~ .**2, data = amostra_2, family = PO(mu.link = 'log'))
+plot(mod2_pos)
+rqres.plot(mod2_pos, howmany=50, plot="all")
+
+
+
+
+modelo1_step <- step(mod1, scope = list(lower = mod1, upper = mod1_pos), 
+                direction = 'both', trace = FALSE)
+modelo2_step <- step(mod2, scope = list(lower = mod2, upper = mod2_pos), 
+                direction = 'both', trace = FALSE)
+
+
+
+
+
+
+mod1_zip <- gamlss(visits ~ .**2, family = ZIP(mu.link = "log", sigma.link = "logit"),
+                data = amostra_1)
+plot(mod1_zip)
+rqres.plot(mod1_zip, howmany=50, plot="all")
+
+
+mod1_zipn <- gamlss(visits ~ .**2,
+                    family = ZINBI(mu.link = "log", sigma.link = "log", nu.link = "logit"),
+                    data = amostra_1)
+plot(mod1_zipn)
+rqres.plot(mod1_zipn, howmany=50, plot="all")
+```
+
+
+
+
+
 ### Primeiramente, só para identificar possível inflação de 0's e afins
+
 ```{r, echo = TRUE}
-hist(docvis$visit)
+hist(docvis$visits, ylim = c(0,5000), xlim = c(0,10),
+     breaks = seq(0, 10, by = 1), xaxt = "n", las = 1)
+axis(side = 1, at = seq(0, 10, by = 1))
 summary(docvis)
 ```
 
 Dá para ver que tem uma GRANDE concentração nos 0's. O TERCEIRO QUARTIL é 0.
 
-Enfim, são 5190 observações, então dá para imaginar que o ajuste vai tender a ser
-um pouco complicado.
-
+Enfim, são 5190 observações, então dá para imaginar que o ajuste vai tender a ser um pouco complicado.
 
 ### Testes de ajustes
-Alguns dos modelos que eu testei e que deram algum resultado (porque, por exemplo,
-os inflacionados de 0's, não convergiam ou não rodavam):
+
+Alguns dos modelos que eu testei e que deram algum resultado (porque, por exemplo, os inflacionados de 0's, não convergiam ou não rodavam):
+
 ```{r, echo = TRUE}
 
 ## Lembrando que todos esses têm ligação log por padrão.
@@ -73,7 +148,7 @@ mod_bnb = gamlss(visits ~.**2, family = BNB, data = docvis)
 #daí eu tentei jogar ele num stepwise, mas ele não ajustava só com intercepto.
 #Sendo assim, fiz stepwise no PIG e usei os coeficientes dele no BNB. Ficou legal.
 mod0 = gamlss(visits ~ 1, family = PIG, data = docvis)
-mod_step = step(mod0, scope = list(lower = mod0, upper = mod_pig),
+mod_step = step(mod0, scope = list(lower = mod0, upper = mod_pig), 
                 direction = 'both', trace = FALSE)
 
 
@@ -101,12 +176,11 @@ duplomod = gamlss(formula(mod_step), sigma.formula = ~ illness + income + gender
 
 ```
 
-Se você está se perguntando de onde eu tirei que algo está bom ou ruim, rode, 
-pra cada modelo:
+Se você está se perguntando de onde eu tirei que algo está bom ou ruim, rode, pra cada modelo:
+
 ```{r, echo = TRUE}
 # coloca só aqui, deixei mais fácil
-fit = mod_sic
-
+fit = mod_bnb
 
 
 plot(fit)
@@ -120,9 +194,6 @@ rqres.plot(fit, howmany=50, plot="all")
 summary(fit)
 ```
 
-
-Daí, o que eu acho é que, agora, devemos focar em melhorar esse *mod_final*, já que
-a distribuição dele se ajusta bem aos dados, então qualquer melhora é um ganho ao
-invés de um pedido de desculpas.
+Daí, o que eu acho é que, agora, devemos focar em melhorar esse *mod_final*, já que a distribuição dele se ajusta bem aos dados, então qualquer melhora é um ganho ao invés de um pedido de desculpas.
 
 Enfim, vejam o que acham.
